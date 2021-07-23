@@ -1,0 +1,509 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: My code to create a VPC with Public and Private subnets.  
+  Note, this template installs two EC2 instances as NAT instances>
+  If you are experimentaing using Free Tier, jut be aware if you leave this VPC running
+  It is not free because of the potential to use up your EC2 allowance of 750 hours per month
+
+Metadata:
+ # in this case, using metadata to get a list of AMI-IDs, 
+ # needs an IAM role assigned to get permission to pull that list of AMI IDs
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: 'Amazon EC2 Configuration'
+        Parameters:
+          - AmiID
+
+    ParameterLabels:
+      AmiID:
+        default: 'Amazon Machine Image ID'
+Parameters:
+    # First we establish some paramaters for Cloudformation
+    # You an get a list of VPC's in your region, or a list availablity zones etc. to choose
+    # Inputs are allowed by simply declaring a variable with type string
+    # CHoices are allowed by giving a list of allowed values
+    # Can establish default parameters with the a line item = "Default:"
+    # Parameters are essentially varialbes, a variable that can be used later in the stack
+    #  i.e. a variable "Environment", later in the stack, mappings can use that variable
+    #  In paramaters set "ENV" = Test, in mappings, with Env=test, 
+    #  the mappings will have a relationship of when ENV=Test the EC2 Type=t2.micro
+
+  KeyName:
+      # You should already have a key in your region to choose an existing key
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: 'AWS::EC2::KeyPair::KeyName'
+
+  EnvironmentType:
+     # Gives user a choice during Stack setup 
+    Description: 'Specify the Environment type of the stack.'
+    Type: String
+    Default: Test
+    AllowedValues:
+      - Dev
+      - Test
+      - Prod
+    ConstraintDescription: 'Specify either Dev, Test or Prod.'
+  
+  AmiID:
+      # This paramater default states to get an AMI ID for hte latest Amazon linux EC2 AMI
+      # Note: If creating Ifrastructure as Code, it might be best to use a declared version
+      #       of the AMI instead of simply "the latest".  
+      #  For this exercise, I'm good with using the 'latest'
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Description: 'The ID of the AMI.'
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+
+  AvailabilityZones:
+  # get a list of availability zones
+    Type: List<AWS::EC2::AvailabilityZone::Name>
+    Description: The list of Availability Zones to use for the subnets in the VPC.
+ 
+  VPCName:
+  # Create a new VPC, so asking user to a define a name for the new VPC
+    Type: String
+    Description: The name of the VPC.
+
+  SSHAllowCIDR:
+  # Establish allowed IP address(es) that can communicate with Hosts
+    Description: CIDR block to grant access to the NAT host
+    Type: String
+    Default: "0.0.0.0/0"
+Mappings:
+  EnvironmentToInstanceType:
+    Dev:
+      InstanceType: t2.nano
+    Test:
+      InstanceType: t2.micro
+    Prod:
+      InstanceType: t2.small
+Resources:
+  # --------------------- Create the VPC -----------------------
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Ref VPCName 
+          # See parameter for VPC Name
+
+  # --------------------- Public Subnet #1 -----------------------
+  VPCPublicSubnet1:
+   # Public Subnet 1
+    
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.1.0/24
+      VpcId: !Ref VPC
+        # Refers to the VPC created by this stack
+      
+      AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+        # Assigns this subnet to the first availability zone
+
+      MapPublicIpOnLaunch: true
+        # Indicates if instances launched in this subnet receive a public IPv4 address.
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+        - Key: subnet-type
+          Value: Public
+  VPCPublicSubnet1RouteTable:
+   # Create a route table for Public Subnet 1
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+       # Refers to the VPC created by this stack
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+  VPCPublicSubnet1RouteTableAssociation:
+      # This associates the route table to the public a subnet
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: VPCPublicSubnet1RouteTable
+      SubnetId:
+        Ref: VPCPublicSubnet1
+  VPCPublicSubnet1DefaultRoute:
+      # This actually creates a route to the Ineternet Gateway
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: VPCPublicSubnet1RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: VPCIGW
+    DependsOn:
+      - VPCGW
+
+  # --------------------- Public Subnet #2 -----------------------
+  VPCPublicSubnet2:
+      ##Public Subnet 2
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.2.0/24
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+        # Selects the second availability zone
+      MapPublicIpOnLaunch: true
+        # Indicates if instances launched in this subnet receive a public IPv4 address.
+      Tags:
+        - Key: Name
+          Value: PublicSubnet2
+        - Key: subnet-type
+          Value: Public
+  VPCPublicSubnet2RouteTable:
+      # Create a route table for Public Subnet 2
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PublicSubnet2
+  VPCPublicSubnet2RouteTableAssociation:
+      #Create the route table associateion between route table and subnet
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: VPCPublicSubnet2RouteTable
+      SubnetId:
+        Ref: VPCPublicSubnet2
+  VPCPublicSubnet2DefaultRoute:
+      # This actually creates a route to the Ineternet Gateway
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref VPCPublicSubnet2RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref VPCIGW
+    DependsOn:
+      - VPCGW
+
+  # --------------------- Private Subnet #1 -----------------------
+  VPCPrivateSubnet1:
+        ## Private Subnet 1
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.11.0/24
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !Ref AvailabilityZones]
+        # Assigns this subnet to the first availability zone
+
+      MapPublicIpOnLaunch: true
+        # Indicates whether instances launched in this subnet receive a public IPv4 address.
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet1
+        - Key: subnet-type
+          Value: Private
+  VPCPrivateubnet1RouteTable:
+      # Create a route table for Private Subnet 1
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet1
+  VPCPrivateSubnet1RouteTableAssociation:
+      # # This associates the route table
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: VPCPrivateubnet1RouteTable
+      SubnetId:
+        Ref: VPCPrivateSubnet1
+  VPCPrivateSubnet1DefaultRoute:
+      ## This actually creates a route to the NAT Instance
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: VPCPrivateubnet1RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NATInstance
+
+  # --------------------- Public Subnet #2 -----------------------
+  VPCPrivateSubnet2:
+      # Private Subnet 2
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: 10.0.12.0/24
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !Ref AvailabilityZones]
+        # Selects the second availability zone
+      MapPublicIpOnLaunch: true
+        # Indicates whether instances launched in this subnet receive a public IPv4 address
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet2
+        - Key: subnet-type
+          Value: Private
+  VPCPrivateSubnet2RouteTable:
+      # Create a route table for Private Subnet 2
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: VPCPrivateSubnet2
+  VPCPrivateSubnet2RouteTableAssociation:
+      # Create the route table associateion
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId:
+        Ref: VPCPrivateSubnet2RouteTable
+      SubnetId:
+        Ref: VPCPrivateSubnet2
+  VPCPrivateSubnet2DefaultRoute:
+      # Creates a route to the 2nd NAT Instance
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: VPCPrivateSubnet2RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      InstanceId: !Ref NAT2Instance
+
+  # --------------------- Internet Gateway -----------------------
+  VPCIGW:
+      # Internet Gateway
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: VPCIGW
+  VPCGW:
+      # Internet Gateway Attachment
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: VPC
+      InternetGatewayId:
+        Ref: VPCIGW
+
+  # ------------ Permissionn for access into AWS Managed Instance Core ---------------------
+  SSMIAMRole:
+      # This calls an IAM role.  
+      # This role gives permissionn for access into AWS Managed Instance Core to get an AmI ID
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  InstanceProfile:
+        # Its not gooe enough to just stipulate an IAM role with permissions
+        # Nope, ya got to create a profile for an Instance to use,
+        #       and associated the profile to the IAM role... UGH
+
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref SSMIAMRole
+
+  # --------------------- Security Group for Controller/Bastion Host -----------------------
+  SGController:
+      # Controller Security Group
+      # Allow SSH inbound from MyIP
+      # Allow Outbound to internet
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for NAT host
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHAllowCIDR
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Controller-sg"          
+
+  # ---------------------------- Controller Instance ---------------------------------------
+  ControllerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiID
+      KeyName:
+        Ref: KeyName
+      IamInstanceProfile: !Ref InstanceProfile
+      InstanceType: !FindInMap [EnvironmentToInstanceType, !Ref EnvironmentType, InstanceType]
+      SubnetId: !Ref VPCPublicSubnet1
+      SecurityGroupIds:
+        - !Ref SGController
+      Monitoring: true
+      SourceDestCheck: True
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Controller"
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -xe
+          yum update -y
+          # set hostname
+          hostname="NAT"
+          hostname $hostname
+          echo $hostname > /etc/hostname
+
+  # --------------------- Get some EIP addresses -----------------------
+  NATEIP:
+      # Get an Elastic IP for 1st NAT Host
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NATEIPAssoc:
+      # Associate EIP to 1st NAT
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      EIP: !Ref NATEIP
+      InstanceId: !Ref NATInstance
+  NAT2EIP:
+      # setup Second NAT host
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NAT2EIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      EIP: !Ref NAT2EIP
+      InstanceId: !Ref NAT2Instance
+
+  # --------------------- Security Group for 1st NAT -----------------------
+  NATSecurityGroup:
+      # NAT Security Group
+      # Allow SSH inbound from Controller
+      # Allow Outbound to internet
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for NAT host
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !GetAtt SGController.GroupId
+      
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NAT-sg"          
+
+  # -------------------------- 1st Nat Instance      -----------------------
+  NATInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiID
+      KeyName:
+        Ref: KeyName
+      IamInstanceProfile: !Ref InstanceProfile
+      InstanceType: !FindInMap [EnvironmentToInstanceType, !Ref EnvironmentType, InstanceType]
+      SubnetId: !Ref VPCPublicSubnet1
+      SecurityGroupIds:
+        - !Ref NATSecurityGroup
+      Monitoring: true
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NAT1"  
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -xe
+          yum update -y
+          # set hostname
+          hostname="NAT"
+          hostname $hostname
+          echo $hostname > /etc/hostname
+
+  # --------------------- Security Group for 2nd NAT -----------------------
+  NAT2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG for NAT host
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !GetAtt SGController.GroupId        
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NAT2-sg"          
+
+  # -------------------------- 2nd Nat Instance      -----------------------
+  NAT2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiID
+      KeyName:
+        Ref: KeyName
+      IamInstanceProfile: !Ref InstanceProfile
+      InstanceType: !FindInMap [EnvironmentToInstanceType, !Ref EnvironmentType, InstanceType]
+      SubnetId: !Ref VPCPublicSubnet2
+      SecurityGroupIds:
+        - !Ref NAT2SecurityGroup
+      Monitoring: true
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-NAT2"
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -xe
+          yum update -y
+          # set hostname
+          hostname="NAT2"
+          hostname $hostname
+          echo $hostname > /etc/hostname
+
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: VpcId
+  WebServerInstanceProfile:
+    Value: !Ref InstanceProfile
+
+  PublicSubnet1:
+    Value: !Ref VPCPublicSubnet1
+    Export:
+      Name: PublicSubnet1
+  PublicSubnet2:
+    Value: !Ref VPCPublicSubnet2
+    Export:
+      Name: PublicSubnet2
+  PrivateSubnet1:
+    Value: !Ref VPCPrivateSubnet1
+    Export:
+      Name: PrivateSubnet1
+  PrivateSubnet2:
+    Value: !Ref VPCPrivateSubnet2
+    Export:
+      Name: PrivateSubnet2
+
+  NATPublicDNS:
+    Description: 'Public DNS of EC2 instance'
+    Value: !GetAtt NATInstance.PublicDnsName
+
+  NATElasticIP:
+    Description: 'Elastic IP assigned to EC2'
+    Value: !Ref NATEIP
+
+  NAT2PublicDNS:
+    Description: 'Public DNS of EC2 instance'
+    Value: !GetAtt NAT2Instance.PublicDnsName
+
+  NAT2ElasticIP:
+    Description: 'Elastic IP assigned to EC2'
+    Value: !Ref NAT2EIP
+
+  InstanceProfile:
+    Value: !Ref InstanceProfile
+    Export:
+      Name: InstanceProfile
