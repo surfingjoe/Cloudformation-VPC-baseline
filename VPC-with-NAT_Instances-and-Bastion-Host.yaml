@@ -45,12 +45,12 @@ Parameters:
     ConstraintDescription: 'Specify either Dev, Test or Prod.'
   
   AmiID:
-      # This paramater default states to get an AMI ID for hte latest Amazon linux EC2 AMI
-      # Note: If creating Ifrastructure as Code, it might be best to use a declared version
-      #       of the AMI instead of simply "the latest".  
-      #  For this exercise, I'm good with using the 'latest'
+      # This paramater default states to get an AMI ID for the latest Amazon linux EC2 AMI
+      # Note: If creating Infrastructure as Code, it might be best to use a declared version
+      # of the AMI instead of simply "the latest".  
+      # For this exercise, I'm good with using the 'latest'
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Description: 'The ID of the AMI.'
+    Description: 'Get the ID of the AMI.'
     Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
 
   AvailabilityZones:
@@ -348,11 +348,11 @@ Resources:
           #!/bin/bash -xe
           yum update -y
           # set hostname
-          hostname="NAT"
+          hostname="Controller"
           hostname $hostname
           echo $hostname > /etc/hostname
 
-  # --------------------- Get some EIP addresses -----------------------
+  # --------------------- Get an EIP addresses -----------------------
   NATEIP:
       # Get an Elastic IP for 1st NAT Host
     Type: AWS::EC2::EIP
